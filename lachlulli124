@@ -1,0 +1,432 @@
+-- ================================================================
+-- Fire Hub - Premium Brainrot ESP & Webhook System
+-- Features:
+-- - Findet das wertvollste Pet im Server
+-- - Zeigt ein ansprechendes ESP mit Feuer-Effekten
+-- - Sendet eine Discord-Webhook-Nachricht
+-- - Zeigt Profilbild oben rechts
+-- - Verlässt den Server nach erfolgter Meldung
+-- ================================================================
+
+-- Konfiguration
+local Config = {
+    WebhookURL = 'https://discord.com/api/webhooks/1419395552407326800/AXnf9f6QCt22uw4ORuKT3afLCZQB7Z2gCG08a_lZErBaurunpmygwSS8buQ915xChJv-',
+    ESPRefreshRate = 0.2,
+    MaxPetSize = 40,
+    WaitBeforeLeave = 5,
+    MinValueToReport = 10000000,
+    PlaceId = 109983668079237,
+    ProfileImage = "https://cdn.discordapp.com/attachments/1308897786296668302/1419377962351853578/raw.png", -- Discord Profilbild
+    Colors = {
+        Primary = Color3.fromRGB(255, 69, 0),
+        Secondary = Color3.fromRGB(255, 215, 0),
+        Accent = Color3.fromRGB(255, 140, 0),
+        Text = Color3.fromRGB(255, 255, 255),
+        Background = Color3.fromRGB(30, 30, 30),
+        Outline = Color3.fromRGB(255, 100, 0)
+    }
+}
+
+-- Services
+local Workspace = game:GetService('Workspace')
+local Players = game:GetService('Players')
+local HttpService = game:GetService('HttpService')
+local TeleportService = game:GetService('TeleportService')
+local TweenService = game:GetService('TweenService')
+local RunService = game:GetService('RunService')
+local CoreGui = game:GetService('CoreGui')
+
+-- HTTP Funktion
+local requestFunc = syn and syn.request or http and http.request or http_request or request
+if not requestFunc then warn('⚠️ Keine HTTP-Funktion gefunden!') end
+
+-- Hilfsfunktionen
+local function formatNumber(num)
+    num = tonumber(num) or 0
+    if num >= 1e12 then return string.format('%.2fT', num / 1e12) end
+    if num >= 1e9 then return string.format('%.2fB', num / 1e9) end
+    if num >= 1e6 then return string.format('%.2fM', num / 1e6) end
+    if num >= 1e3 then return string.format('%.0fK', num / 1e3) end
+    return string.format('%d', math.floor(num))
+end
+
+local function parseMoney(text)
+    if type(text) ~= 'string' then return nil end
+    local cleanText = text:gsub(',', ''):gsub('%s+', '')
+    local num, unit = cleanText:match('%$?([%d%.]+)([kKmMbBtT]?)/[sS]')
+    if not num then return nil end
+    
+    local value = tonumber(num)
+    if not value then return nil end
+    
+    local multiplier = ({k = 1e3, K = 1e3, m = 1e6, M = 1e6, b = 1e9, B = 1e9, t = 1e12, T = 1e12})[unit] or 1
+    return value * multiplier
+end
+
+local function cleanName(name)
+    local rarityWords = {
+        rainbow = true, gold = true, golden = true, diamond = true,
+        mythic = true, mythical = true, secret = true, legendary = true,
+        epic = true, rare = true, common = true, god = true, godly = true,
+        brainrot = true, shiny = true, extinct = true, huge = true,
+        titanic = true, exclusive = true, limited = true, special = true
+    }
+    
+    local parts = {}
+    for word in name:gmatch('%S+') do
+        local lowerWord = word:lower()
+        if not rarityWords[lowerWord] and not lowerWord:find('%$') and not lowerWord:find('/s') then
+            table.insert(parts, word)
+        end
+    end
+    
+    return #parts > 0 and table.concat(parts, ' ') or name
+end
+
+-- Pet Scanning
+local function findBestPet()
+    local bestPet, bestName, bestValue = nil, nil, -1
+    
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA('Model') then
+            local ok, _, size = pcall(obj.GetBoundingBox, obj)
+            if ok and size and size.Magnitude <= Config.MaxPetSize then
+                for _, gui in ipairs(obj:GetDescendants()) do
+                    if gui:IsA('BillboardGui') then
+                        local maxValue = nil
+                        local petName = ""
+                        for _, label in ipairs(gui:GetDescendants()) do
+                            if label:IsA('TextLabel') then
+                                local value = parseMoney(label.Text or '')
+                                if value and (not maxValue or value > maxValue) then
+                                    maxValue = value
+                                end
+                                local clean = cleanName(label.Text or '')
+                                if clean ~= '' and #clean > #petName then
+                                    petName = clean
+                                end
+                            end
+                        end
+                        if maxValue and maxValue > bestValue then
+                            bestValue = maxValue
+                            bestName = petName ~= '' and petName or obj.Name
+                            bestPet = obj
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return bestPet, bestName, bestValue
+end
+
+-- ESP System
+local currentESP = {}
+
+local function clearESP()
+    for _, item in ipairs(currentESP) do
+        pcall(function() item:Destroy() end)
+    end
+    currentESP = {}
+end
+
+local function createFireEffect(part)
+    local fire = Instance.new('Fire')
+    fire.Size = 6
+    fire.Heat = 3
+    fire.Color = Config.Colors.Primary
+    fire.SecondaryColor = Config.Colors.Secondary
+    fire.Parent = part
+    
+    local sparkles = Instance.new('Sparkles')
+    sparkles.SparkleColor = Config.Colors.Secondary
+    sparkles.Parent = part
+    
+    return {fire, sparkles}
+end
+
+local function applyESP(pet, name, value)
+    clearESP()
+    if not pet.PrimaryPart then return end
+    
+    local highlight = Instance.new('Highlight')
+    highlight.FillColor = Config.Colors.Primary
+    highlight.OutlineColor = Config.Colors.Outline
+    highlight.FillTransparency = 0.8
+    highlight.OutlineTransparency = 0.2
+    highlight.Adornee = pet
+    highlight.Parent = pet
+    table.insert(currentESP, highlight)
+    
+    local effects = createFireEffect(pet.PrimaryPart)
+    for _, effect in ipairs(effects) do
+        table.insert(currentESP, effect)
+    end
+    
+    local billboard = Instance.new('BillboardGui')
+    billboard.Size = UDim2.new(0, 320, 0, 120)
+    billboard.AlwaysOnTop = true
+    billboard.StudsOffset = Vector3.new(0, 6, 0)
+    billboard.MaxDistance = 600
+    billboard.Adornee = pet.PrimaryPart
+    billboard.Parent = pet.PrimaryPart
+    table.insert(currentESP, billboard)
+    
+    local container = Instance.new('Frame')
+    container.Size = UDim2.new(1, 0, 1, 0)
+    container.BackgroundColor3 = Config.Colors.Background
+    container.BackgroundTransparency = 0.2
+    container.BorderSizePixel = 2
+    container.BorderColor3 = Config.Colors.Accent
+    container.Parent = billboard
+    
+    local corner = Instance.new('UICorner')
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = container
+    
+    local header = Instance.new('Frame')
+    header.Size = UDim2.new(1, 0, 0.3, 0)
+    header.BackgroundColor3 = Config.Colors.Accent
+    header.BorderSizePixel = 0
+    header.Parent = container
+    
+    local headerCorner = Instance.new('UICorner')
+    headerCorner.CornerRadius = UDim.new(0, 8)
+    headerCorner.Parent = header
+    
+    local icon = Instance.new('TextLabel')
+    icon.Size = UDim2.new(0.2, 0, 1, 0)
+    icon.Position = UDim2.new(0, 5, 0, 0)
+    icon.BackgroundTransparency = 1
+    icon.Text = "🔥"
+    icon.TextColor3 = Config.Colors.Text
+    icon.TextScaled = true
+    icon.Font = Enum.Font.GothamBlack
+    icon.Parent = header
+    
+    local title = Instance.new('TextLabel')
+    title.Size = UDim2.new(0.8, 0, 1, 0)
+    title.Position = UDim2.new(0.2, 0, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "FIRE HUB - TOP PET"
+    title.TextColor3 = Config.Colors.Text
+    title.TextScaled = true
+    title.Font = Enum.Font.GothamBold
+    title.Parent = header
+    
+    local nameLabel = Instance.new('TextLabel')
+    nameLabel.Size = UDim2.new(1, -10, 0.35, 0)
+    nameLabel.Position = UDim2.new(0, 5, 0.3, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = name
+    nameLabel.TextColor3 = Config.Colors.Secondary
+    nameLabel.TextStrokeTransparency = 0.4
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextScaled = true
+    nameLabel.Parent = container
+    
+    local valueLabel = Instance.new('TextLabel')
+    valueLabel.Size = UDim2.new(1, -10, 0.35, 0)
+    valueLabel.Position = UDim2.new(0, 5, 0.65, 0)
+    valueLabel.BackgroundTransparency = 1
+    valueLabel.Text = "$" .. formatNumber(value) .. "/s"
+    valueLabel.TextColor3 = Config.Colors.Primary
+    valueLabel.TextStrokeTransparency = 0.4
+    valueLabel.Font = Enum.Font.GothamBlack
+    valueLabel.TextScaled = true
+    valueLabel.Parent = container
+    
+    local tweenInfo = TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+    local tween = TweenService:Create(effects[1], tweenInfo, {Size = 10})
+    tween:Play()
+    table.insert(currentESP, tween)
+end
+
+-- Webhook
+local function sendWebhook(petName, petValue)
+    if not requestFunc or petValue < Config.MinValueToReport then return end
+    
+    local pcJobId = game.JobId
+    local playerCount = #Players:GetPlayers()
+    
+    local embed = {
+        title = "🔥 Fire Hub - Top Pet Found!",
+        description = string.format(
+            "**Pet:** %s\n**Value:** $%s/s\n**Server Size:** %d players\n\n**Join Code:**\n```%s```",
+            petName, formatNumber(petValue), playerCount, pcJobId
+        ),
+        color = 16744448,
+        thumbnail = {url = Config.ProfileImage},
+        footer = {text = "Fire Hub • " .. os.date('%Y-%m-%d %H:%M:%S')},
+        fields = {
+            {
+                name = "Quick Join",
+                value = string.format('```lua\ngame:GetService("TeleportService"):TeleportToPlaceInstance(%d, "%s", game.Players.LocalPlayer)\n```', Config.PlaceId, pcJobId),
+                inline = false
+            }
+        }
+    }
+    
+    local success, response = pcall(function()
+        return requestFunc({
+            Url = Config.WebhookURL,
+            Method = 'POST',
+            Headers = {['Content-Type'] = 'application/json'},
+            Body = HttpService:JSONEncode({username = "Fire Hub", avatar_url = Config.ProfileImage, embeds = {embed}})
+        })
+    end)
+    
+    if success then
+        print('✅ Webhook sent: ' .. petName .. ' ($' .. formatNumber(petValue) .. '/s)')
+    else
+        warn('❌ Webhook error: ' .. tostring(response))
+    end
+end
+
+-- GUI oben rechts (Profilbild)
+local function createTopRightGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FireHubTopRight"
+    screenGui.Parent = CoreGui
+    
+    local image = Instance.new("ImageLabel")
+    image.Size = UDim2.new(0, 80, 0, 80)
+    image.Position = UDim2.new(1, -90, 0, 10)
+    image.Image = Config.ProfileImage
+    image.BackgroundTransparency = 1
+    image.Parent = screenGui
+end
+
+-- =================== FORCE SERVER HOPPER (mit Cache + Blacklist) ===================
+local hopCount = 0
+local visitedServers = {}
+local serverCache = {}   -- gespeicherte Server IDs
+local maxPages = 10      -- bis zu 10 Seiten = 1000 Server
+local cooldown = 2       -- Sekunden zwischen API-Requests pro Seite
+
+-- =================== SERVER LADEN (PAGINATION) ===================
+local function fetchServers()
+    serverCache = {}
+    local cursor = ""
+    local pagesLoaded = 0
+
+    print("📥 Lade bis zu " .. (maxPages*100) .. " Server in den Cache...")
+
+    while pagesLoaded < maxPages do
+        local url = "https://games.roblox.com/v1/games/" .. Config.PlaceId ..
+            "/servers/Public?sortOrder=Asc&limit=100" .. (cursor ~= "" and "&cursor="..cursor or "")
+
+        local success, response = pcall(function()
+            return game:HttpGet(url)
+        end)
+
+        if success then
+            local data = HttpService:JSONDecode(response)
+            if data and data.data then
+                for _, server in pairs(data.data) do
+                    if server.id ~= game.JobId and server.playing > 1 and server.playing < server.maxPlayers then
+                        if not visitedServers[server.id] then
+                            table.insert(serverCache, server.id)
+                        end
+                    end
+                end
+                cursor = data.nextPageCursor or ""
+                pagesLoaded += 1
+                print("✅ Seite " .. pagesLoaded .. " geladen (" .. #serverCache .. " Server im Cache)")
+                if cursor == "" then break end
+            else
+                warn("⚠️ Keine Daten auf Seite " .. pagesLoaded)
+                break
+            end
+        else
+            warn("❌ Fehler beim Laden (Seite " .. pagesLoaded .. ")")
+            break
+        end
+
+        task.wait(cooldown) -- wichtig um 429 zu vermeiden
+    end
+
+    print("🎯 Fertig: " .. #serverCache .. " Server im Cache gespeichert")
+end
+
+-- =================== SERVER HOP ===================
+local function hopServer(force)
+    hopCount += 1
+
+    -- Aktuellen Server immer ignorieren
+    visitedServers[game.JobId] = true
+
+    -- Wenn Cache leer → neu laden
+    if #serverCache == 0 then
+        fetchServers()
+    end
+
+    if #serverCache == 0 then
+        warn("⚠️ Kein Server im Cache, fallback...")
+        TeleportService:Teleport(Config.PlaceId, Players.LocalPlayer)
+        return
+    end
+
+    -- Nimm den ersten frischen Server
+    local serverId = nil
+    for i, id in ipairs(serverCache) do
+        if not visitedServers[id] then
+            serverId = id
+            table.remove(serverCache, i)
+            break
+        end
+    end
+
+    -- Falls nichts Frisches → notfalls irgendeinen
+    if not serverId and force and #serverCache > 0 then
+        serverId = table.remove(serverCache, 1)
+    end
+
+    if serverId then
+        print("🔄 Hop #" .. hopCount .. " → Server ID: " .. serverId)
+        visitedServers[serverId] = true
+        TeleportService:TeleportToPlaceInstance(Config.PlaceId, serverId, Players.LocalPlayer)
+    else
+        print("⚠️ Keine frischen Server gefunden, reload Cache...")
+        fetchServers()
+    end
+end
+
+-- Hauptfunktion
+local function main()
+    if not game:IsLoaded() then game.Loaded:Wait() end
+    wait(2)
+    
+    createTopRightGUI()
+    
+    print("\n===================================\n      FIRE HUB ACTIVATED\n===================================\n")
+    
+    local pet, name, value = findBestPet()
+    
+    if pet and value and value >= Config.MinValueToReport then
+        print("🔥 Top Pet Found: " .. (name or pet.Name) .. " ($" .. formatNumber(value) .. "/s)")
+        applyESP(pet, name or pet.Name, value)
+        sendWebhook(name or pet.Name, value)
+        wait(Config.WaitBeforeLeave)
+        print("🚀 Leaving server...")
+        hopServer(true)
+    else
+        print("❌ No valuable pet found (Min: $" .. formatNumber(Config.MinValueToReport) .. "/s)")
+        print("\n📋 Job ID:")
+        print("```" .. game.JobId .. "```")
+        wait(Config.WaitBeforeLeave)
+        hopServer(true)
+    end
+end
+
+-- Starte Skript
+main()
+
+-- =================== LOOP (Force Hop IMMER AN) ===================
+task.spawn(function()
+    fetchServers()
+    while true do
+        hopServer(true) -- immer forcieren
+        task.wait(1) -- alle 1 Sekunde hoppen
+    end
+end)
