@@ -10,11 +10,12 @@
 
 -- Konfiguration
 local Config = {
-    WebhookURL = 'https://discord.com/api/webhooks/1419395552407326800/AXnf9f6QCt22uw4ORuKT3afLCZQB7Z2gCG08a_lZErBaurunpmygwSS8buQ915xChJv-',
+    WebhookURL_500K_10M = 'https://ptb.discord.com/api/webhooks/1421275893204123710/agWZghROY2e1i7HvgB1sYcAojtNgUzwSFbtS_mysHuUjIzH90lTFommyfoQcs6kD2lT-', -- 500K-10M Channel
+    WebhookURL_10M_Plus = 'https://discord.com/api/webhooks/1419395552407326800/AXnf9f6QCt22uw4ORuKT3afLCZQB7Z2gCG08a_lZErBaurunpmygwSS8buQ915xChJv-', -- 10M+ Channel
     ESPRefreshRate = 0.2,
     MaxPetSize = 40,
     WaitBeforeLeave = 5,
-    MinValueToReport = 10000000,
+    MinValueToReport = 500000, -- Geändert auf 500K für den ersten Channel
     PlaceId = 109983668079237,
     ProfileImage = "https://cdn.discordapp.com/attachments/1308897786296668302/1419377962351853578/raw.png", -- Discord Profilbild
     Colors = {
@@ -242,20 +243,31 @@ local function applyESP(pet, name, value)
     table.insert(currentESP, tween)
 end
 
--- Webhook
+-- Webhook (MODIFIZIERT FÜR DUAL CHANNELS)
 local function sendWebhook(petName, petValue)
     if not requestFunc or petValue < Config.MinValueToReport then return end
     
     local pcJobId = game.JobId
     local playerCount = #Players:GetPlayers()
     
+    -- Bestimme den richtigen Webhook basierend auf dem Wert
+    local webhookURL
+    local channelType
+    if petValue >= 10000000 then -- 10M+
+        webhookURL = Config.WebhookURL_10M_Plus
+        channelType = "10M+ Channel"
+    else -- 500K-10M
+        webhookURL = Config.WebhookURL_500K_10M
+        channelType = "500K-10M Channel"
+    end
+    
     local embed = {
         title = "🔥 Fire Hub - Top Pet Found!",
         description = string.format(
-            "**Pet:** %s\n**Value:** $%s/s\n**Server Size:** %d players\n\n**Join Code:**\n```%s```",
-            petName, formatNumber(petValue), playerCount, pcJobId
+            "**Pet:** %s\n**Value:** $%s/s\n**Server Size:** %d players\n**Channel:** %s\n\n**Join Code:**\n```%s```",
+            petName, formatNumber(petValue), playerCount, channelType, pcJobId
         ),
-        color = 16744448,
+        color = petValue >= 10000000 and 16711680 or 16744448, -- Rot für 10M+, Orange für 500K-10M
         thumbnail = {url = Config.ProfileImage},
         footer = {text = "Fire Hub • " .. os.date('%Y-%m-%d %H:%M:%S')},
         fields = {
@@ -269,7 +281,7 @@ local function sendWebhook(petName, petValue)
     
     local success, response = pcall(function()
         return requestFunc({
-            Url = Config.WebhookURL,
+            Url = webhookURL,
             Method = 'POST',
             Headers = {['Content-Type'] = 'application/json'},
             Body = HttpService:JSONEncode({username = "Fire Hub", avatar_url = Config.ProfileImage, embeds = {embed}})
@@ -277,7 +289,7 @@ local function sendWebhook(petName, petValue)
     end)
     
     if success then
-        print('✅ Webhook sent: ' .. petName .. ' ($' .. formatNumber(petValue) .. '/s)')
+        print('✅ Webhook sent to ' .. channelType .. ': ' .. petName .. ' ($' .. formatNumber(petValue) .. '/s)')
     else
         warn('❌ Webhook error: ' .. tostring(response))
     end
