@@ -253,9 +253,12 @@ local function sendWebhook(petName, petValue)
     -- Bestimme den richtigen Webhook basierend auf dem Wert
     local webhookURL
     local channelType
+    local roleMention = ""
+    
     if petValue >= 10000000 then -- 10M+
         webhookURL = Config.WebhookURL_10M_Plus
         channelType = "10M+ Channel"
+        roleMention = "<@&1421969543055802552>" -- 10M+ Role Ping
     else -- 500K-10M
         webhookURL = Config.WebhookURL_500K_10M
         channelType = "500K-10M Channel"
@@ -284,7 +287,12 @@ local function sendWebhook(petName, petValue)
             Url = webhookURL,
             Method = 'POST',
             Headers = {['Content-Type'] = 'application/json'},
-            Body = HttpService:JSONEncode({username = "Fire Hub", avatar_url = Config.ProfileImage, embeds = {embed}})
+            Body = HttpService:JSONEncode({
+                username = "Fire Hub", 
+                avatar_url = Config.ProfileImage, 
+                content = roleMention, -- Role Ping hier hinzugefügt
+                embeds = {embed}
+            })
         })
     end)
     
